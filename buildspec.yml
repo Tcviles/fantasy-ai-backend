@@ -3,7 +3,7 @@ version: 0.2
 phases:
   install:
     runtime-versions:
-      python: 3.11.9
+      python: 3.11
     commands:
       - echo "Installing AWS CLI and SAM CLI"
       - pip install --upgrade awscli aws-sam-cli
@@ -17,8 +17,8 @@ phases:
   build:
     commands:
       - echo "Building and packaging SAM application"
-      - sam build
-      - sam package --s3-bucket $S3_BUCKET --output-template-file packaged.yaml
+      - sam build --use-container
+      - sam package --s3-bucket fantasy-ai-sam-bucket --output-template-file packaged.yaml
 
 artifacts:
   files:
