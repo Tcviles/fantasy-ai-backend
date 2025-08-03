@@ -7,6 +7,7 @@ Resources:
     Type: AWS::SQS::Queue
     Properties:
       QueueName: sleeper-process-queue
+      VisibilityTimeout: 330
 
   APILambda:
     Type: AWS::Serverless::Function
@@ -14,7 +15,7 @@ Resources:
       CodeUri: src/api_lambda/
       Handler: app.lambda_handler
       Runtime: python3.11
-      Timeout: 5
+      Timeout: 30
       Policies:
         - SQSSendMessagePolicy:
             QueueName: sleeper-process-queue
@@ -34,7 +35,7 @@ Resources:
       CodeUri: src/fetch_and_store_players/
       Handler: app.lambda_handler
       Runtime: python3.11
-      Timeout: 120
+      Timeout: 300
       Events:
         SQSTrigger:
           Type: SQS
