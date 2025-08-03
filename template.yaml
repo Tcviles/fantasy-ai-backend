@@ -16,6 +16,12 @@ Resources:
       Environment:
         Variables:
           TABLE_NAME: SleeperPlayers
+      Events:
+        ApiGatewayTrigger:
+          Type: Api
+          Properties:
+            Path: /players/fetch
+            Method: POST
 
   SleeperPlayers:
     Type: AWS::DynamoDB::Table
