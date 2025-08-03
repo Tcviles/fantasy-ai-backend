@@ -68,6 +68,29 @@ Resources:
         Variables:
           TABLE_NAME: SleeperPlayers
 
+  ComparePlayersFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/compare_players/
+      Handler: app.lambda_handler
+      Runtime: python3.11
+      Timeout: 15
+      Environment:
+        Variables:
+          OPENAI_API_KEY: '{{resolve:ssm:/fantasy-ai/openai_api_key:1}}'
+      Events:
+        ComparePlayersApi:
+          Type: Api
+          Properties:
+            Path: /compare
+            Method: POST
+      Policies:
+        - Statement:
+            Effect: Allow
+            Action:
+              - ssm:GetParameter
+            Resource: arn:aws:ssm:*:*:parameter/fantasy-ai/openai_api_key
+
   SleeperPlayers:
     Type: AWS::DynamoDB::Table
     Properties:
@@ -103,3 +126,7 @@ Outputs:
   GetPlayersEndpoint:
     Description: "Endpoint to retrieve players by position"
     Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/players"
+
+  ComparePlayersEndpoint:
+    Description: "Endpoint to compare players with OpenAI"
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/compare"
