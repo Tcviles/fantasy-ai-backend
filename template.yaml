@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: Lambda to fetch and store Sleeper player data
+Description: Lambda stack for fetching, storing, and retrieving Sleeper player data
 
 Resources:
   SleeperQueue:
@@ -48,6 +48,26 @@ Resources:
         Variables:
           TABLE_NAME: SleeperPlayers
 
+  GetPlayersFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/get_players/
+      Handler: app.lambda_handler
+      Runtime: python3.11
+      Timeout: 10
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: SleeperPlayers
+      Events:
+        GetPlayersApi:
+          Type: Api
+          Properties:
+            Path: /players
+            Method: GET
+      Environment:
+        Variables:
+          TABLE_NAME: SleeperPlayers
+
   SleeperPlayers:
     Type: AWS::DynamoDB::Table
     Properties:
@@ -55,7 +75,31 @@ Resources:
       AttributeDefinitions:
         - AttributeName: player_id
           AttributeType: S
+        - AttributeName: position
+          AttributeType: S
       KeySchema:
         - AttributeName: player_id
           KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: PositionIndex
+          KeySchema:
+            - AttributeName: position
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
       BillingMode: PAY_PER_REQUEST
+
+Outputs:
+  ApiEndpoint:
+    Description: "Base URL for your API Gateway"
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod"
+    Export:
+      Name: "FantasyApiBaseUrl"
+
+  StartSyncEndpoint:
+    Description: "Endpoint to trigger player sync"
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/start-sync"
+
+  GetPlayersEndpoint:
+    Description: "Endpoint to retrieve players by position"
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/players"
