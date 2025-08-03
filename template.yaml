@@ -1,0 +1,30 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Lambda to fetch and store Sleeper player data
+
+Resources:
+  FetchAndStorePlayersFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/fetch_and_store_players/
+      Handler: app.lambda_handler
+      Runtime: python3.11
+      Timeout: 30
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: SleeperPlayers
+      Environment:
+        Variables:
+          TABLE_NAME: SleeperPlayers
+
+  SleeperPlayers:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: SleeperPlayers
+      AttributeDefinitions:
+        - AttributeName: player_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: player_id
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
