@@ -3,25 +3,49 @@ Transform: AWS::Serverless-2016-10-31
 Description: Lambda to fetch and store Sleeper player data
 
 Resources:
+  SleeperQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: sleeper-process-queue
+
+  APILambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/api_lambda/
+      Handler: app.lambda_handler
+      Runtime: python3.11
+      Timeout: 5
+      Policies:
+        - SQSSendMessagePolicy:
+            QueueName: sleeper-process-queue
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            Path: /start-sync
+            Method: POST
+      Environment:
+        Variables:
+          QUEUE_URL: !Ref SleeperQueue
+
   FetchAndStorePlayersFunction:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: src/fetch_and_store_players/
       Handler: app.lambda_handler
       Runtime: python3.11
-      Timeout: 30
+      Timeout: 120
+      Events:
+        SQSTrigger:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt SleeperQueue.Arn
       Policies:
         - DynamoDBCrudPolicy:
             TableName: SleeperPlayers
       Environment:
         Variables:
           TABLE_NAME: SleeperPlayers
-      Events:
-        ApiGatewayTrigger:
-          Type: Api
-          Properties:
-            Path: /players/fetch
-            Method: POST
 
   SleeperPlayers:
     Type: AWS::DynamoDB::Table
