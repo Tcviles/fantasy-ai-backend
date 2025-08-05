@@ -1,8 +1,17 @@
 import os
 import json
+import boto3
 import openai
 
-openai.api_key = os.environ["OPENAI_API_KEY"]
+def get_openai_api_key():
+    ssm = boto3.client("ssm")
+    response = ssm.get_parameter(
+        Name="/fantasy-ai/openai_api_key",  # adjust if your key is named differently
+        WithDecryption=True
+    )
+    return response["Parameter"]["Value"]
+
+openai.api_key = get_openai_api_key()
 
 def lambda_handler(event, context):
     try:
