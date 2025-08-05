@@ -2,11 +2,21 @@ import os
 import json
 import boto3
 from boto3.dynamodb.conditions import Key
+from decimal import Decimal
 
 dynamodb = boto3.resource("dynamodb")
 table = dynamodb.Table(os.environ["TABLE_NAME"])
 
 VALID_POSITIONS = {"QB", "RB", "WR", "TE", "K", "DEF"}
+
+def convert_decimals(obj):
+    if isinstance(obj, list):
+        return [convert_decimals(i) for i in obj]
+    elif isinstance(obj, dict):
+        return {k: convert_decimals(v) for k, v in obj.items()}
+    elif isinstance(obj, Decimal):
+        return int(obj) if obj % 1 == 0 else float(obj)
+    return obj
 
 def lambda_handler(event, context):
     print("Event received:", json.dumps(event))
@@ -46,9 +56,11 @@ def lambda_handler(event, context):
         players.sort(key=get_search_rank)
         print("Sorted players by search_rank")
 
+        players_clean = convert_decimals(players)
+
         return {
             "statusCode": 200,
-            "body": json.dumps(players)
+            "body": json.dumps(players_clean)
         }
 
     except Exception as e:
