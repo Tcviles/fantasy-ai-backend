@@ -45,6 +45,8 @@ def lambda_handler(event, context):
                 "team": team,
                 "position": position,
                 "injury_status": data.get("injury_status"),
+                "depth_chart_order": data.get("depth_chart_order"),
+                "search_rank": data.get("search_rank")
             }
 
             batch.put_item(Item=item)
