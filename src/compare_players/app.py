@@ -47,7 +47,10 @@ def lambda_handler(event, context):
 
         user_prompt = (
             f"Here are the draftable players:\n\n{player_list}\n\n"
-            "In a 12-team PPR draft, who should I pick and why? Respond with one recommendation and a clear reason."
+            "In a 12-team PPR fantasy football draft, who should I pick and why?\n"
+            "Respond in two parts:\n"
+            "1. **Recommendation**: Give only the player's full name (short answer).\n"
+            "2. **Reasoning**: Give a clear, detailed explanation of why you recommend this player."
         )
 
         print("System Prompt:\n", system_prompt)
