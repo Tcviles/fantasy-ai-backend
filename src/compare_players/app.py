@@ -9,6 +9,7 @@ def get_openai_api_key():
         Name="/fantasy-ai/openai_api_key",
         WithDecryption=True
     )
+    print(f'API Key: {response["Parameter"]["Value"]}')
     return response["Parameter"]["Value"]
 
 client = OpenAI(api_key=get_openai_api_key())
