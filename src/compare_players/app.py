@@ -6,7 +6,7 @@ import openai
 def get_openai_api_key():
     ssm = boto3.client("ssm")
     response = ssm.get_parameter(
-        Name="/fantasy-ai/openai_api_key",  # adjust if your key is named differently
+        Name="/fantasy-ai/openai_api_key",
         WithDecryption=True
     )
     return response["Parameter"]["Value"]
@@ -14,14 +14,19 @@ def get_openai_api_key():
 openai.api_key = get_openai_api_key()
 
 def lambda_handler(event, context):
+    print("Event received:", json.dumps(event))
+
     try:
         body = json.loads(event["body"])
         players = body.get("players", [])
 
         if not players:
-            return {"statusCode": 400, "body": json.dumps({"error": "No players provided."})}
+            print("No players provided in request body.")
+            return {
+                "statusCode": 400,
+                "body": json.dumps({"error": "No players provided."})
+            }
 
-        # Format structured player list
         player_list = "\n".join(
             [
                 f"{i+1}. {p.get('search_full_name')} | Team: {p.get('team')} | Position: {p.get('position')} | "
@@ -45,6 +50,9 @@ def lambda_handler(event, context):
             "In a 12-team PPR draft, who should I pick and why? Respond with one recommendation and a clear reason."
         )
 
+        print("System Prompt:\n", system_prompt)
+        print("User Prompt:\n", user_prompt)
+
         response = openai.ChatCompletion.create(
             model="gpt-4",
             messages=[
@@ -53,8 +61,19 @@ def lambda_handler(event, context):
             ]
         )
 
+        print("Raw OpenAI Response:", json.dumps(response.to_dict(), indent=2))
+
         answer = response.choices[0].message["content"].strip()
-        return {"statusCode": 200, "body": json.dumps({"recommendation": answer})}
+        print("Final Recommendation:\n", answer)
+
+        return {
+            "statusCode": 200,
+            "body": json.dumps({"recommendation": answer})
+        }
 
     except Exception as e:
-        return {"statusCode": 500, "body": json.dumps({"error": str(e)})}
+        print("Exception occurred:", str(e))
+        return {
+            "statusCode": 500,
+            "body": json.dumps({"error": str(e)})
+        }

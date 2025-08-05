@@ -25,9 +25,10 @@ def lambda_handler(event, context):
         for player_id, data in players.items():
             position = data.get("position")
             team = data.get("team")
-            full_name = data.get("search_full_name")
+            first_name = data.get("first_name") or ""
+            last_name = data.get("last_name") or ""
+            full_name = data.get("search_full_name") or f"{first_name} {last_name}".strip()
 
-            # Filter out players with invalid data
             if (
                 position not in VALID_POSITIONS
                 or not team
