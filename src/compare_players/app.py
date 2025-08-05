@@ -1,7 +1,7 @@
 import os
 import json
 import boto3
-import openai
+from openai import OpenAI
 
 def get_openai_api_key():
     ssm = boto3.client("ssm")
@@ -11,7 +11,7 @@ def get_openai_api_key():
     )
     return response["Parameter"]["Value"]
 
-openai.api_key = get_openai_api_key()
+client = OpenAI(api_key=get_openai_api_key())
 
 def lambda_handler(event, context):
     print("Event received:", json.dumps(event))
@@ -53,17 +53,18 @@ def lambda_handler(event, context):
         print("System Prompt:\n", system_prompt)
         print("User Prompt:\n", user_prompt)
 
-        response = openai.ChatCompletion.create(
+        response = client.chat.completions.create(
             model="gpt-4",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
-            ]
+            ],
+            temperature=0.7,
         )
 
-        print("Raw OpenAI Response:", json.dumps(response.to_dict(), indent=2))
+        print("Raw OpenAI Response:", response)
 
-        answer = response.choices[0].message["content"].strip()
+        answer = response.choices[0].message.content.strip()
         print("Final Recommendation:\n", answer)
 
         return {
