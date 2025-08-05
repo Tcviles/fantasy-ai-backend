@@ -52,9 +52,11 @@ def lambda_handler(event, context):
 
         print("System Prompt:\n", system_prompt)
         print("User Prompt:\n", user_prompt)
+        models = client.models.list()
+        print([m.id for m in models.data])
 
         response = client.chat.completions.create(
-            model="gpt-4",
+            model="gpt-4-turbo",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
