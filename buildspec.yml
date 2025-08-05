@@ -1,5 +1,9 @@
 version: 0.2
 
+env:
+  parameter-store:
+    OPENAI_API_KEY: "/fantasy-ai/openai_api_key"
+
 phases:
   install:
     runtime-versions:
@@ -10,9 +14,7 @@ phases:
 
   pre_build:
     commands:
-      - echo "Retrieving OpenAI API key from Parameter Store"
-      - export OPENAI_API_KEY=$(aws ssm get-parameter --name "/fantasy-ai/openai_api_key" --with-decryption --query "Parameter.Value" --output text)
-      - echo "OPENAI_API_KEY successfully retrieved"
+      - echo "OPENAI_API_KEY is available as environment variable"
 
   build:
     commands:

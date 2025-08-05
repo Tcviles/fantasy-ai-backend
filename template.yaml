@@ -77,7 +77,7 @@ Resources:
       Timeout: 15
       Environment:
         Variables:
-          OPENAI_API_KEY: '{{resolve:ssm:/fantasy-ai/openai_api_key:1}}'
+          OPENAI_API_KEY: '{{resolve:ssm-secure:/fantasy-ai/openai_api_key:1}}'
       Events:
         ComparePlayersApi:
           Type: Api
