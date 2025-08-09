@@ -90,6 +90,26 @@ Resources:
               - ssm:GetParameter
             Resource: arn:aws:ssm:*:*:parameter/fantasy-ai/openai_api_key
 
+    KeeperRecommendationsFunction:
+      Type: AWS::Serverless::Function
+      Properties:
+        CodeUri: src/keeper_recommendations/
+        Handler: app.lambda_handler
+        Runtime: python3.11
+        Timeout: 20
+        Policies:
+          - Statement:
+              Effect: Allow
+              Action:
+                - ssm:GetParameter
+              Resource: arn:aws:ssm:*:*:parameter/fantasy-ai/openai_api_key
+        Events:
+          KeeperApi:
+            Type: Api
+            Properties:
+              Path: /keepers
+              Method: POST
+
   SleeperPlayers:
     Type: AWS::DynamoDB::Table
     Properties:
