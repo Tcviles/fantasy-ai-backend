@@ -13,6 +13,16 @@ def get_openai_api_key():
 
 client = OpenAI(api_key=get_openai_api_key())
 
+def _safe_name(p: dict) -> str:
+    # prefer search_full_name, else first + last
+    sf = (p.get("search_full_name") or "").strip()
+    if sf:
+        return sf
+    first = (p.get("first_name") or "").strip()
+    last = (p.get("last_name") or "").strip()
+    name = f"{first} {last}".strip()
+    return name if name else "Unknown Player"
+
 def lambda_handler(event, context):
     print("Event received:", json.dumps(event))
 
@@ -20,21 +30,33 @@ def lambda_handler(event, context):
         body = json.loads(event["body"])
         players = body.get("players", [])
 
-        if not players:
-            print("No players provided in request body.")
+        # Require at least 2 players to compare
+        if not isinstance(players, list) or len(players) < 2:
             return {
                 "statusCode": 400,
-                "body": json.dumps({"error": "No players provided."})
+                "body": json.dumps({"error": "Provide at least two players to compare."})
             }
 
-        player_list = "\n".join(
-            [
-                f"{i+1}. {p.get('search_full_name')} | Team: {p.get('team')} | Position: {p.get('position')} | "
-                f"Injury: {p.get('injury_status') or 'None'} | Depth: {p.get('depth_chart_order')} | "
-                f"Age: {p.get('age')} | Rank: {p.get('search_rank')}"
-                for i, p in enumerate(players)
-            ]
-        )
+        # Build a robust list using fallbacks for missing fields
+        def g(p, k, default="None"):
+            v = p.get(k)
+            return default if v is None or v == "" else v
+
+        lines = []
+        for i, p in enumerate(players, start=1):
+            name = _safe_name(p)
+            team = g(p, "team", "Unknown")
+            pos = g(p, "position", "Unknown")
+            inj = g(p, "injury_status", "None")
+            depth = g(p, "depth_chart_order", "None")
+            age = g(p, "age", "None")
+            rank = g(p, "search_rank", "99999")
+            lines.append(
+                f"{i}. {name} | Team: {team} | Position: {pos} | Injury: {inj} | "
+                f"Depth: {depth} | Age: {age} | Rank: {rank}"
+            )
+
+        player_list = "\n".join(lines)
 
         system_prompt = (
             "You are a fantasy football expert for the 2025 NFL season. "
@@ -64,8 +86,6 @@ def lambda_handler(event, context):
             ],
             temperature=0.7,
         )
-
-        print("Raw OpenAI Response:", response)
 
         answer = response.choices[0].message.content.strip()
         print("Final Recommendation:\n", answer)
