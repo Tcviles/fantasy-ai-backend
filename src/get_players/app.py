@@ -1,7 +1,7 @@
 import os
 import json
 import boto3
-from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.conditions import Key, Attr
 from decimal import Decimal
 
 dynamodb = boto3.resource("dynamodb")
@@ -22,50 +22,57 @@ def lambda_handler(event, context):
     print("Event received:", json.dumps(event))
 
     params = event.get("queryStringParameters") or {}
-    position = params.get("position", "All").upper()
-    print(f"Requested position: {position}")
+    position = (params.get("position") or "ALL").upper()
+    team = (params.get("team") or "").upper().strip()
+
+    print(f"Requested position: {position}, team: {team or '-'}")
 
     if position != "ALL" and position not in VALID_POSITIONS:
-        print("Invalid position:", position)
-        return {
-            "statusCode": 400,
-            "body": json.dumps({"error": "Invalid position"})
-        }
+        return {"statusCode": 400, "body": json.dumps({"error": "Invalid position"})}
 
     try:
-        if position == "ALL":
-            print("Scanning full table...")
-            response = table.scan()
-        else:
-            print(f"Querying for position: {position}")
+        # Fast path: both position and team
+        if position != "ALL" and team:
+            pos_team = f"{position}#{team}"
+            print(f"Query PosTeamRankIndex for {pos_team}")
+            response = table.query(
+                IndexName="PosTeamRankIndex",
+                KeyConditionExpression=Key("pos_team").eq(pos_team),
+                ProjectionExpression="player_id, first_name, last_name, team, position, search_rank"
+            )
+
+        # Position-only path (existing index)
+        elif position != "ALL":
+            print(f"Query PositionIndex for position={position}")
             response = table.query(
                 IndexName="PositionIndex",
-                KeyConditionExpression=Key("position").eq(position)
+                KeyConditionExpression=Key("position").eq(position),
+                ProjectionExpression="player_id, first_name, last_name, team, position, search_rank"
+            )
+            # Optional filter by team if provided but GSI not ready
+            if team:
+                print(f"Filtering in-memory for team={team}")
+                items = [p for p in response.get("Items", []) if (p.get("team") or "").upper() == team]
+                response["Items"] = items
+
+        # Fallback: full scan (avoid when possible)
+        else:
+            print("Scanning full table (ALL). Avoid in prod.")
+            response = table.scan(
+                ProjectionExpression="player_id, first_name, last_name, team, position, search_rank"
             )
 
         players = response.get("Items", [])
         print(f"Retrieved {len(players)} players")
 
-        # Sort by search_rank (defaulting to a high number if missing or invalid)
-        def get_search_rank(player):
-            try:
-                return int(player.get("search_rank", 99999))
-            except (ValueError, TypeError):
-                return 99999
+        # Sort by search_rank (ascending)
+        def get_rank(p):
+            try: return int(p.get("search_rank", 99999))
+            except Exception: return 99999
+        players.sort(key=get_rank)
 
-        players.sort(key=get_search_rank)
-        print("Sorted players by search_rank")
-
-        players_clean = convert_decimals(players)
-
-        return {
-            "statusCode": 200,
-            "body": json.dumps(players_clean)
-        }
+        return {"statusCode": 200, "body": json.dumps(convert_decimals(players))}
 
     except Exception as e:
         print("Error occurred:", str(e))
-        return {
-            "statusCode": 500,
-            "body": json.dumps({"error": "Internal server error"})
-        }
+        return {"statusCode": 500, "body": json.dumps({"error": "Internal server error"})}

@@ -92,11 +92,17 @@ Resources:
     Type: AWS::DynamoDB::Table
     Properties:
       TableName: SleeperPlayers
+      BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - AttributeName: player_id
           AttributeType: S
         - AttributeName: position
           AttributeType: S
+        # NEW attributes for GSI
+        - AttributeName: pos_team
+          AttributeType: S
+        - AttributeName: search_rank
+          AttributeType: N
       KeySchema:
         - AttributeName: player_id
           KeyType: HASH
@@ -107,7 +113,20 @@ Resources:
               KeyType: HASH
           Projection:
             ProjectionType: ALL
-      BillingMode: PAY_PER_REQUEST
+        # NEW GSI: query by Position+Team, sorted by search_rank
+        - IndexName: PosTeamRankIndex
+          KeySchema:
+            - AttributeName: pos_team
+              KeyType: HASH
+            - AttributeName: search_rank
+              KeyType: RANGE
+          Projection:
+            ProjectionType: INCLUDE
+            NonKeyAttributes:
+              - first_name
+              - last_name
+              - team
+              - position
 
 Outputs:
   ApiEndpoint:
