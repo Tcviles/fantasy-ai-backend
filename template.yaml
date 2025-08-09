@@ -98,7 +98,6 @@ Resources:
           AttributeType: S
         - AttributeName: position
           AttributeType: S
-        # NEW attributes for GSI
         - AttributeName: pos_team
           AttributeType: S
         - AttributeName: search_rank
@@ -113,7 +112,6 @@ Resources:
               KeyType: HASH
           Projection:
             ProjectionType: ALL
-        # NEW GSI: query by Position+Team, sorted by search_rank
         - IndexName: PosTeamRankIndex
           KeySchema:
             - AttributeName: pos_team
@@ -121,12 +119,7 @@ Resources:
             - AttributeName: search_rank
               KeyType: RANGE
           Projection:
-            ProjectionType: INCLUDE
-            NonKeyAttributes:
-              - first_name
-              - last_name
-              - team
-              - position
+            ProjectionType: ALL
 
 Outputs:
   ApiEndpoint:

@@ -1,7 +1,7 @@
 import os
 import json
 import boto3
-from boto3.dynamodb.conditions import Key, Attr
+from boto3.dynamodb.conditions import Key
 from decimal import Decimal
 
 dynamodb = boto3.resource("dynamodb")
@@ -18,6 +18,17 @@ def convert_decimals(obj):
         return int(obj) if obj % 1 == 0 else float(obj)
     return obj
 
+# 👇 Use aliases for reserved words like "position"
+PROJECTION_NAMES = {
+    "#pid": "player_id",
+    "#fn": "first_name",
+    "#ln": "last_name",
+    "#team": "team",
+    "#pos": "position",
+    "#rank": "search_rank",
+}
+PROJECTION_EXPR = "#pid, #fn, #ln, #team, #pos, #rank"
+
 def lambda_handler(event, context):
     print("Event received:", json.dumps(event))
 
@@ -31,35 +42,37 @@ def lambda_handler(event, context):
         return {"statusCode": 400, "body": json.dumps({"error": "Invalid position"})}
 
     try:
-        # Fast path: both position and team
+        # Fast path: position + team via GSI
         if position != "ALL" and team:
             pos_team = f"{position}#{team}"
             print(f"Query PosTeamRankIndex for {pos_team}")
             response = table.query(
                 IndexName="PosTeamRankIndex",
                 KeyConditionExpression=Key("pos_team").eq(pos_team),
-                ProjectionExpression="player_id, first_name, last_name, team, position, search_rank"
+                ProjectionExpression=PROJECTION_EXPR,
+                ExpressionAttributeNames=PROJECTION_NAMES,
             )
 
-        # Position-only path (existing index)
+        # Position-only path (PositionIndex)
         elif position != "ALL":
             print(f"Query PositionIndex for position={position}")
             response = table.query(
                 IndexName="PositionIndex",
                 KeyConditionExpression=Key("position").eq(position),
-                ProjectionExpression="player_id, first_name, last_name, team, position, search_rank"
+                ProjectionExpression=PROJECTION_EXPR,
+                ExpressionAttributeNames=PROJECTION_NAMES,
             )
-            # Optional filter by team if provided but GSI not ready
             if team:
                 print(f"Filtering in-memory for team={team}")
                 items = [p for p in response.get("Items", []) if (p.get("team") or "").upper() == team]
                 response["Items"] = items
 
-        # Fallback: full scan (avoid when possible)
+        # Fallback scan
         else:
             print("Scanning full table (ALL). Avoid in prod.")
             response = table.scan(
-                ProjectionExpression="player_id, first_name, last_name, team, position, search_rank"
+                ProjectionExpression=PROJECTION_EXPR,
+                ExpressionAttributeNames=PROJECTION_NAMES,
             )
 
         players = response.get("Items", [])
@@ -67,8 +80,11 @@ def lambda_handler(event, context):
 
         # Sort by search_rank (ascending)
         def get_rank(p):
-            try: return int(p.get("search_rank", 99999))
-            except Exception: return 99999
+            try:
+                return int(p.get("search_rank", 99999))
+            except Exception:
+                return 99999
+
         players.sort(key=get_rank)
 
         return {"statusCode": 200, "body": json.dumps(convert_decimals(players))}
