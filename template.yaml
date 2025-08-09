@@ -54,7 +54,7 @@ Resources:
       CodeUri: src/get_players/
       Handler: app.lambda_handler
       Runtime: python3.11
-      Timeout: 10
+      Timeout: 15
       Policies:
         - DynamoDBReadPolicy:
             TableName: SleeperPlayers
@@ -67,6 +67,8 @@ Resources:
       Environment:
         Variables:
           TABLE_NAME: SleeperPlayers
+          # 👇 pass the new GSI name to the lambda so code isn't hard-coded
+          POS_TEAM_INDEX: PosTeamRankIndexV2
 
   ComparePlayersFunction:
     Type: AWS::Serverless::Function
@@ -106,13 +108,31 @@ Resources:
         - AttributeName: player_id
           KeyType: HASH
       GlobalSecondaryIndexes:
+        # Existing position-only index
         - IndexName: PositionIndex
           KeySchema:
             - AttributeName: position
               KeyType: HASH
           Projection:
             ProjectionType: ALL
+
+        # OLD index stays (cannot change projection in-place)
         - IndexName: PosTeamRankIndex
+          KeySchema:
+            - AttributeName: pos_team
+              KeyType: HASH
+            - AttributeName: search_rank
+              KeyType: RANGE
+          Projection:
+            ProjectionType: INCLUDE
+            NonKeyAttributes:
+              - first_name
+              - last_name
+              - team
+              - position
+
+        # NEW index with ProjectionType: ALL
+        - IndexName: PosTeamRankIndexV2
           KeySchema:
             - AttributeName: pos_team
               KeyType: HASH
