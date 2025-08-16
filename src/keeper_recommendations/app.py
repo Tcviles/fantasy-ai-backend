@@ -67,6 +67,8 @@ ROUND_WEIGHTS = {
     20: 0.65
 }
 
+#claude
+
 def weight_for_round(r: int) -> float:
     if r in ROUND_WEIGHTS:
         return ROUND_WEIGHTS[r]

@@ -41,24 +41,45 @@ def lambda_handler(event, context):
 
     print(f"Requested position: {position or '-'}, team: {team or '-'}")
 
-    # Require BOTH
-    if not position or not team:
-        return {"statusCode": 400, "body": json.dumps({"error": "Both 'position' and 'team' are required."})}
-    if position not in VALID_POSITIONS:
-        return {"statusCode": 400, "body": json.dumps({"error": "Invalid position"})}
-
     try:
-        pos_team = f"{position}#{team}"
-        print(f"Query {POS_TEAM_INDEX} for {pos_team}")
+        players = []
 
-        response = table.query(
-            IndexName=POS_TEAM_INDEX,
-            KeyConditionExpression=Key("pos_team").eq(pos_team),
-            ProjectionExpression=PROJECTION_EXPR,
-            ExpressionAttributeNames=PROJECTION_NAMES,
-        )
+        if position and team:
+            if position not in VALID_POSITIONS:
+                return {"statusCode": 400, "body": json.dumps({"error": "Invalid position"})}
 
-        players = response.get("Items", [])
+            pos_team = f"{position}#{team}"
+            print(f"Query {POS_TEAM_INDEX} for pos_team = {pos_team}")
+
+            response = table.query(
+                IndexName=POS_TEAM_INDEX,
+                KeyConditionExpression=Key("pos_team").eq(pos_team),
+                ProjectionExpression=PROJECTION_EXPR,
+                ExpressionAttributeNames=PROJECTION_NAMES,
+            )
+            players = response.get("Items", [])
+
+        elif position:
+            if position not in VALID_POSITIONS:
+                return {"statusCode": 400, "body": json.dumps({"error": "Invalid position"})}
+
+            print(f"Query GSI for position = {position}")
+            response = table.query(
+                IndexName="PositionIndex",  # <-- ⚠️ You must have a GSI on 'position'
+                KeyConditionExpression=Key("position").eq(position),
+                ProjectionExpression=PROJECTION_EXPR,
+                ExpressionAttributeNames=PROJECTION_NAMES,
+            )
+            players = response.get("Items", [])
+
+        else:
+            print("Scan all players (no filters)")
+            response = table.scan(
+                ProjectionExpression=PROJECTION_EXPR,
+                ExpressionAttributeNames=PROJECTION_NAMES,
+            )
+            players = response.get("Items", [])
+
         print(f"Retrieved {len(players)} players")
 
         # Sort by search_rank (ascending)
@@ -67,6 +88,7 @@ def lambda_handler(event, context):
                 return int(p.get("search_rank", 99999))
             except Exception:
                 return 99999
+
         players.sort(key=get_rank)
 
         return {"statusCode": 200, "body": json.dumps(convert_decimals(players))}
