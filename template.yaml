@@ -1,185 +1,154 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: Lambda stack for fetching, storing, and retrieving Sleeper player data
+Description: Compact player catalog and fantasy decision APIs
+
+Globals:
+  Function:
+    Runtime: python3.13
+    Architectures:
+      - arm64
+    MemorySize: 256
+    Tracing: Active
+  Api:
+    MinimumCompressionSize: 1024
+    Cors:
+      AllowMethods: "'GET,POST,OPTIONS'"
+      AllowHeaders: "'Content-Type,If-None-Match'"
+      AllowOrigin: "'*'"
 
 Resources:
-  SleeperQueue:
-    Type: AWS::SQS::Queue
+  PlayersTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
-      QueueName: sleeper-process-queue
-      VisibilityTimeout: 330
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: player_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: player_id
+          KeyType: HASH
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
 
-  APILambda:
+  PlayerCatalogBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldCatalogVersions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 7
+      VersioningConfiguration:
+        Status: Enabled
+
+  BuildPlayerCatalogFunction:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: src/api_lambda/
+      CodeUri: src/player_catalog/
       Handler: app.lambda_handler
-      Runtime: python3.11
-      Timeout: 30
-      Policies:
-        - SQSSendMessagePolicy:
-            QueueName: sleeper-process-queue
-      Events:
-        ApiEvent:
-          Type: Api
-          Properties:
-            Path: /start-sync
-            Method: POST
+      Timeout: 60
       Environment:
         Variables:
-          QUEUE_URL: !Ref SleeperQueue
-
-  FetchAndStorePlayersFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      CodeUri: src/fetch_and_store_players/
-      Handler: app.lambda_handler
-      Runtime: python3.11
-      Timeout: 300
-      Events:
-        SQSTrigger:
-          Type: SQS
-          Properties:
-            Queue: !GetAtt SleeperQueue.Arn
+          CATALOG_BUCKET: !Ref PlayerCatalogBucket
+          CATALOG_KEY: players/v1/catalog.json
+          PLAYERS_TABLE: !Ref PlayersTable
       Policies:
+        - S3WritePolicy:
+            BucketName: !Ref PlayerCatalogBucket
         - DynamoDBCrudPolicy:
-            TableName: SleeperPlayers
-      Environment:
-        Variables:
-          TABLE_NAME: SleeperPlayers
+            TableName: !Ref PlayersTable
+      Events:
+        Daily:
+          Type: Schedule
+          Properties:
+            Schedule: cron(17 8 * * ? *)
+            Enabled: true
 
   GetPlayersFunction:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: src/get_players/
+      CodeUri: src/get_catalog/
       Handler: app.lambda_handler
-      Runtime: python3.11
-      Timeout: 15
+      Timeout: 10
+      Environment:
+        Variables:
+          CATALOG_BUCKET: !Ref PlayerCatalogBucket
+          CATALOG_KEY: players/v1/catalog.json
       Policies:
-        - DynamoDBReadPolicy:
-            TableName: SleeperPlayers
+        - S3ReadPolicy:
+            BucketName: !Ref PlayerCatalogBucket
       Events:
-        GetPlayersApi:
+        GetPlayers:
           Type: Api
           Properties:
             Path: /players
             Method: GET
-      Environment:
-        Variables:
-          TABLE_NAME: SleeperPlayers
-          # 👇 pass the new GSI name to the lambda so code isn't hard-coded
-          POS_TEAM_INDEX: PosTeamRankIndexV2
 
   ComparePlayersFunction:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: src/compare_players/
       Handler: app.lambda_handler
-      Runtime: python3.11
-      Timeout: 15
+      Timeout: 20
+      Environment:
+        Variables:
+          NFL_SEASON: '2026'
+      Policies:
+        - Statement:
+            Effect: Allow
+            Action: ssm:GetParameter
+            Resource: arn:aws:ssm:*:*:parameter/fantasy-ai/openai_api_key
       Events:
-        ComparePlayersApi:
+        ComparePlayers:
           Type: Api
           Properties:
             Path: /compare
             Method: POST
-      Policies:
-        - Statement:
-            Effect: Allow
-            Action:
-              - ssm:GetParameter
-            Resource: arn:aws:ssm:*:*:parameter/fantasy-ai/openai_api_key
 
   KeeperRecommendationsFunction:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: src/keeper_recommendations/
       Handler: app.lambda_handler
-      Runtime: python3.11
-      Timeout: 20
+      Timeout: 30
+      Environment:
+        Variables:
+          NFL_SEASON: '2026'
       Policies:
         - Statement:
             Effect: Allow
-            Action:
-              - ssm:GetParameter
+            Action: ssm:GetParameter
             Resource: arn:aws:ssm:*:*:parameter/fantasy-ai/openai_api_key
       Events:
-        KeeperApi:
+        KeeperRecommendations:
           Type: Api
           Properties:
             Path: /keepers
             Method: POST
 
-  SleeperPlayers:
-    Type: AWS::DynamoDB::Table
-    Properties:
-      TableName: SleeperPlayers
-      BillingMode: PAY_PER_REQUEST
-      AttributeDefinitions:
-        - AttributeName: player_id
-          AttributeType: S
-        - AttributeName: position
-          AttributeType: S
-        - AttributeName: pos_team
-          AttributeType: S
-        - AttributeName: search_rank
-          AttributeType: N
-      KeySchema:
-        - AttributeName: player_id
-          KeyType: HASH
-      GlobalSecondaryIndexes:
-        # Existing position-only index
-        - IndexName: PositionIndex
-          KeySchema:
-            - AttributeName: position
-              KeyType: HASH
-          Projection:
-            ProjectionType: ALL
-
-        # OLD index stays (cannot change projection in-place)
-        - IndexName: PosTeamRankIndex
-          KeySchema:
-            - AttributeName: pos_team
-              KeyType: HASH
-            - AttributeName: search_rank
-              KeyType: RANGE
-          Projection:
-            ProjectionType: INCLUDE
-            NonKeyAttributes:
-              - first_name
-              - last_name
-              - team
-              - position
-
-        # NEW index with ProjectionType: ALL
-        - IndexName: PosTeamRankIndexV2
-          KeySchema:
-            - AttributeName: pos_team
-              KeyType: HASH
-            - AttributeName: search_rank
-              KeyType: RANGE
-          Projection:
-            ProjectionType: ALL
-
 Outputs:
   ApiEndpoint:
-    Description: "Base URL for your API Gateway"
+    Description: Base URL for the mobile app
     Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod"
-    Export:
-      Name: "FantasyApiBaseUrl"
-
-  StartSyncEndpoint:
-    Description: "Endpoint to trigger player sync"
-    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/start-sync"
-
-  GetPlayersEndpoint:
-    Description: "Endpoint to retrieve players by position"
-    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/players"
-
-  ComparePlayersEndpoint:
-    Description: "Endpoint to compare players with OpenAI"
-    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/compare"
-
-  KeeperRecommendationsEndpoint:
-    Description: "Endpoint to get keeper recommendations"
-    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/keepers"
+  CatalogBuilderFunction:
+    Description: Invoke once after the first deployment to seed the catalog
+    Value: !Ref BuildPlayerCatalogFunction
+  PlayersTableName:
+    Description: Normalized Sleeper player records
+    Value: !Ref PlayersTable

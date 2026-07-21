@@ -3,6 +3,38 @@ import json
 import boto3
 from decimal import Decimal
 from openai import OpenAI
+from pydantic import BaseModel
+
+NFL_SEASON = os.environ.get("NFL_SEASON", "2026")
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5.6-luna")
+
+
+class KeeperPlayer(BaseModel):
+    player: str
+    team: str
+    keep_round: int
+    keep_pick: int
+    keep_overall: int
+    board_rank: int
+    value_vs_rank: int
+    risk_notes: list[str]
+    reasoning: str
+
+
+class KeeperGroups(BaseModel):
+    keep: list[KeeperPlayer]
+    bench: list[KeeperPlayer]
+
+
+class KeeperAssumptions(BaseModel):
+    opponent_keepers: int
+    notes: str
+
+
+class KeeperResponse(BaseModel):
+    assumptions: KeeperAssumptions
+    recommendations: KeeperGroups
+    summary: str
 
 # ---------- Secrets / Clients ----------
 
@@ -75,21 +107,19 @@ def weight_for_round(r: int) -> float:
     # beyond configured rounds, taper slowly
     return max(0.55, 0.60 - 0.01 * max(0, r - 20))
 
-def weighted_span_sum(adp_overall: int, keep_overall: int, teams: int) -> float:
+def weighted_span_sum(board_rank: int, keep_overall: int, teams: int) -> float:
     """
-    Sum per-pick weights from ADP to keeper cost:
-      - If keep_overall > adp_overall: sum weights for each pick moved later (good).
-      - If keep_overall < adp_overall: negative sum of weights for moving earlier (bad).
+    Sum per-pick weights from the supplied board rank to keeper cost.
     Efficiently chunked by rounds instead of iterating pick-by-pick.
     """
-    if keep_overall == adp_overall:
+    if keep_overall == board_rank:
         return 0.0
 
     # Determine direction
-    if keep_overall > adp_overall:
-        start, end, sign = adp_overall, keep_overall, +1.0
+    if keep_overall > board_rank:
+        start, end, sign = board_rank, keep_overall, +1.0
     else:
-        start, end, sign = keep_overall, adp_overall, -1.0
+        start, end, sign = keep_overall, board_rank, -1.0
 
     start_round = round_from_overall(start, teams)
     start_pick = pick_in_round(start, teams)
@@ -118,43 +148,60 @@ def weighted_span_sum(adp_overall: int, keep_overall: int, teams: int) -> float:
 
     return sign * total
 
-def normalize_value_and_sort_weighted(data: dict, keepers_allowed: int, teams: int):
+def normalize_value_and_sort_weighted(data: dict, keepers_allowed: int, teams: int, candidates: list[dict]):
     """
-    Enforce correct math: value_vs_adp = keep_overall - estimated_adp_overall (positive = good).
+    Enforce correct math using the caller-provided board rank (positive = good).
     Compute per-pick weighted value by summing weights across the span of picks.
     Sort by adjusted_value (the weighted sum) desc.
     """
+    candidate_by_name = {candidate["name"].lower(): candidate for candidate in candidates}
+
     def fix_list(items):
         fixed = []
         for it in items or []:
             try:
-                ko = int(it.get("keep_overall"))
-                adp = int(it.get("estimated_adp_overall"))
+                candidate = candidate_by_name[it.get("player", "").lower()]
+                ko = int(candidate["keep_overall"])
+                board_rank = int(candidate["board_rank"])
             except Exception:
                 continue
 
-            raw = ko - adp  # positive = good (later pick than market)
-            weighted = weighted_span_sum(adp, ko, teams)
+            raw = ko - board_rank
+            weighted = weighted_span_sum(board_rank, ko, teams)
 
             # average weight is nice to display in UI; avoid div-by-zero
             avg_w = (weighted / raw) if raw else 0.0
 
-            it["value_vs_adp"] = raw
+            it["team"] = candidate["team"]
+            it["keep_round"] = candidate["keep_round"]
+            it["keep_pick"] = candidate["keep_pick"]
+            it["keep_overall"] = ko
+            it["board_rank"] = board_rank
+            it["value_vs_rank"] = raw
             it["capital_weight"] = round(avg_w, 3)  # keep existing field name for UI
             it["adjusted_value"] = weighted         # weighted sum is the new sorter
             fixed.append(it)
         return fixed
 
     recs = data.get("recommendations", {}) or {}
-    keep = fix_list(recs.get("keep"))
-    bench = fix_list(recs.get("bench"))
-
-    # Sort primarily by adjusted (weighted) value desc, tiebreaker: better (smaller) ADP first
-    keep.sort(key=lambda x: (x.get("adjusted_value", -1e12), -int(x.get("estimated_adp_overall", 999999))), reverse=True)
-    bench.sort(key=lambda x: (x.get("adjusted_value", -1e12), -int(x.get("estimated_adp_overall", 999999))), reverse=True)
-
-    # Cap keepers to league rule
-    keep = keep[:keepers_allowed]
+    model_items = [*(recs.get("keep") or []), *(recs.get("bench") or [])]
+    returned_names = {item.get("player", "").lower() for item in model_items}
+    for candidate in candidates:
+        if candidate["name"].lower() not in returned_names:
+            model_items.append({
+                "player": candidate["name"],
+                "risk_notes": [],
+                "reasoning": "Value is calculated from the supplied board rank and keeper cost.",
+            })
+    combined = fix_list(model_items)
+    unique = {item["player"].lower(): item for item in combined}
+    ranked = sorted(
+        unique.values(),
+        key=lambda item: (item.get("adjusted_value", -1e12), -int(item.get("board_rank", 999999))),
+        reverse=True,
+    )
+    keep = ranked[:keepers_allowed]
+    bench = ranked[keepers_allowed:]
 
     data.setdefault("recommendations", {})
     data["recommendations"]["keep"] = keep
@@ -205,28 +252,33 @@ def lambda_handler(event, context):
         rd = meta.get("round")
         pk = meta.get("pick")
         keep_overall = p.get("keeper_overall")
+        board_rank = p.get("board_rank")
         team_abbr = meta.get("team_abbr") or ""
 
-        if not name or rd is None or pk is None or keep_overall is None:
-            return bad_request("Each player needs: player (name), meta.round, meta.pick, keeper_overall.")
+        if not name or rd is None or pk is None or keep_overall is None or board_rank is None:
+            return bad_request("Each player needs: player, board_rank, meta.round, meta.pick, and keeper_overall.")
 
         compact_players.append({
             "name": name,
             "team": team_abbr,
             "keep_overall": int(keep_overall),
+            "board_rank": int(board_rank),
             "keep_round": int(rd),
             "keep_pick": int(pk),
             "keep_str": to_round_pick_str(rd, pk),
         })
 
     system_prompt = (
-        "You are a sharp, up-to-date fantasy football analyst for the 2025 season. "
+        f"You are a sharp fantasy football analyst for the {NFL_SEASON} season. "
         "Evaluate keeper values for the given league and candidates. "
-        "IMPORTANT MATH: value_vs_adp = keep_overall - estimated_adp_overall (positive = good). "
+        f"The ranking source is {league.get('ranking_source', 'the supplied 2026 board')}. "
+        "IMPORTANT MATH: value_vs_rank = keep_overall - board_rank (positive = good). "
         "Smaller overall numbers are more valuable; paying a later pick than market is positive value. "
-        "Example: ADP 15, keep 23 → +8 (good). ADP 45, keep 30 → -15 (bad). "
+        "Example: board rank 15, keep 23 → +8 (good). Board rank 45, keep 30 → -15 (bad). "
         "Prefer meaningful discounts at premium draft capital; early rounds matter more. "
         "Account for others keeping players too (opponent_keepers). "
+        "Never invent or mention ADP, age, years of experience, injury, or role facts not supplied in the request. "
+        "Treat board_rank as the only market-value input. "
         "Return ONLY valid JSON per the schema (no extra text)."
     )
 
@@ -246,8 +298,8 @@ Return strict JSON with this shape:
         "keep_round": number,
         "keep_pick": number,
         "keep_overall": number,
-        "estimated_adp_overall": number,
-        "value_vs_adp": number,  // MUST equal keep_overall - estimated_adp_overall (positive = good)
+        "board_rank": number,
+        "value_vs_rank": number,  // MUST equal keep_overall - board_rank (positive = good)
         "risk_notes": [string],
         "reasoning": string
       }
@@ -259,8 +311,8 @@ Return strict JSON with this shape:
         "keep_round": number,
         "keep_pick": number,
         "keep_overall": number,
-        "estimated_adp_overall": number,
-        "value_vs_adp": number,
+        "board_rank": number,
+        "value_vs_rank": number,
         "risk_notes": [string],
         "reasoning": string
       }
@@ -271,9 +323,9 @@ Return strict JSON with this shape:
 
 Rules:
 - 'keep' must include at most LEAGUE_KEEPERS_ALLOWED players, ranked best to worst.
-- Compute value_vs_adp exactly as described (positive good).
+- Copy board_rank exactly from the candidate and compute value_vs_rank exactly (positive good).
 - Consider league format (PPR/Half/Standard) and QB slots (1QB vs 2QB/Superflex) when weighing positions.
-- Include concise risk/injury/role notes.
+- Do not claim current ADP, age, experience, injuries, depth chart, or role because those facts were not provided. Return an empty risk_notes list unless a risk was supplied.
 """
 
     league_summary = {
@@ -282,7 +334,8 @@ Rules:
         "qb_slots": qb_slots,
         "your_slot": your_slot,
         "keepers_allowed": keepers_allowed,
-        "opponent_keepers_hint": opponent_keepers
+        "opponent_keepers_hint": opponent_keepers,
+        "ranking_source": league.get("ranking_source", "Supplied 2026 board")
     }
 
     user_payload = {"league": league_summary, "players": compact_players}
@@ -290,7 +343,7 @@ Rules:
     user_prompt = (
         "LEAGUE:\n" + json.dumps(league_summary, separators=(",", ":")) +
         "\n\nCANDIDATES:\n" + json.dumps(compact_players, separators=(",", ":")) +
-        "\n\nTASK:\nEvaluate keeper value vs ADP under these league rules using the math and rules above. "
+        "\n\nTASK:\nEvaluate keeper value against the supplied board rank under these league rules. "
         "Output STRICT JSON per the schema. No backticks or extra prose."
         "\n\nSCHEMA:\n" + schema_explanation.strip()
     )
@@ -298,23 +351,25 @@ Rules:
     print("Keeper request (condensed):", json.dumps(user_payload)[:1000])
 
     try:
-        resp = client.chat.completions.create(
-            model="gpt-4o",
-            temperature=0.2,
-            response_format={"type": "json_object"},
-            messages=[
+        resp = client.responses.parse(
+            model=OPENAI_MODEL,
+            input=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
             ],
+            text_format=KeeperResponse,
+            store=False,
         )
-        content = resp.choices[0].message.content
-        data = json.loads(content)
+        if resp.output_parsed is None:
+            raise ValueError("Model returned no keeper recommendation")
+        data = resp.output_parsed.model_dump()
 
         # Server-side guardrails: fix math using weighted per-pick sum and sort.
         data = normalize_value_and_sort_weighted(
             data,
             keepers_allowed=keepers_allowed,
-            teams=teams
+            teams=teams,
+            candidates=compact_players
         )
 
         return {

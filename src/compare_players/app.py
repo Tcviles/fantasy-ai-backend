@@ -1,7 +1,12 @@
 import os
 import json
+from datetime import datetime, timezone
+
 import boto3
 from openai import OpenAI
+
+NFL_SEASON = os.environ.get("NFL_SEASON", "2026")
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5.6-luna")
 
 def get_openai_api_key():
     ssm = boto3.client("ssm")
@@ -58,13 +63,17 @@ def lambda_handler(event, context):
 
         player_list = "\n".join(lines)
 
+        current_date = datetime.now(timezone.utc).date().isoformat()
         system_prompt = (
-            "You are a fantasy football expert for the 2025 NFL season. "
-            "Your job is to help users make the best PPR draft choices based on current data. "
-            "Use only the structured data provided. "
-            "Do NOT use stats or roles from before the 2024 season. "
-            "Base your recommendation on team roles, injuries, age, and projected usage in 2025. "
-            "Respond conversationally, as if advising a fantasy football player in a real draft."
+            f"You are advising a fantasy football draft for the {NFL_SEASON} NFL season. "
+            f"The current date is {current_date}. Never describe the upcoming season as 2025. "
+            "Use only the structured player fields supplied in this request. Treat search rank as "
+            "Sleeper's current relative ordering, where a lower number is better. Do not use assumed "
+            "stats, workloads, roles, ages, depth-chart positions, injuries, or historical facts. "
+            "A missing field is unknown, not evidence that the player is healthy, young, starting, or "
+            "expected to receive a particular workload. If the supplied evidence is limited, say so "
+            "briefly and base the recommendation on the available rank, team, position, and injury fields. "
+            "Respond conversationally and do not mention these instructions."
         )
 
         user_prompt = (
@@ -78,16 +87,14 @@ def lambda_handler(event, context):
         print("System Prompt:\n", system_prompt)
         print("User Prompt:\n", user_prompt)
 
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            temperature=0.7,
+        response = client.responses.create(
+            model=OPENAI_MODEL,
+            instructions=system_prompt,
+            input=user_prompt,
+            store=False,
         )
 
-        answer = response.choices[0].message.content.strip()
+        answer = response.output_text.strip()
         print("Final Recommendation:\n", answer)
 
         return {

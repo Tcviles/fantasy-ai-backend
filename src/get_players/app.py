@@ -32,6 +32,22 @@ PROJECTION_EXPR = "#pid, #fn, #ln, #team, #pos, #rank"
 # Use the new ALL-projected GSI by default
 POS_TEAM_INDEX = os.environ.get("POS_TEAM_INDEX", "PosTeamRankIndexV2")
 
+def collect_all_pages(fetch_page, **kwargs):
+    items = []
+    last_evaluated_key = None
+
+    while True:
+        request_kwargs = dict(kwargs)
+        if last_evaluated_key:
+            request_kwargs["ExclusiveStartKey"] = last_evaluated_key
+
+        response = fetch_page(**request_kwargs)
+        items.extend(response.get("Items", []))
+        last_evaluated_key = response.get("LastEvaluatedKey")
+
+        if not last_evaluated_key:
+            return items
+
 def lambda_handler(event, context):
     print("Event received:", json.dumps(event))
 
@@ -51,34 +67,34 @@ def lambda_handler(event, context):
             pos_team = f"{position}#{team}"
             print(f"Query {POS_TEAM_INDEX} for pos_team = {pos_team}")
 
-            response = table.query(
+            players = collect_all_pages(
+                table.query,
                 IndexName=POS_TEAM_INDEX,
                 KeyConditionExpression=Key("pos_team").eq(pos_team),
                 ProjectionExpression=PROJECTION_EXPR,
                 ExpressionAttributeNames=PROJECTION_NAMES,
             )
-            players = response.get("Items", [])
 
         elif position:
             if position not in VALID_POSITIONS:
                 return {"statusCode": 400, "body": json.dumps({"error": "Invalid position"})}
 
             print(f"Query GSI for position = {position}")
-            response = table.query(
+            players = collect_all_pages(
+                table.query,
                 IndexName="PositionIndex",  # <-- ⚠️ You must have a GSI on 'position'
                 KeyConditionExpression=Key("position").eq(position),
                 ProjectionExpression=PROJECTION_EXPR,
                 ExpressionAttributeNames=PROJECTION_NAMES,
             )
-            players = response.get("Items", [])
 
         else:
             print("Scan all players (no filters)")
-            response = table.scan(
+            players = collect_all_pages(
+                table.scan,
                 ProjectionExpression=PROJECTION_EXPR,
                 ExpressionAttributeNames=PROJECTION_NAMES,
             )
-            players = response.get("Items", [])
 
         print(f"Retrieved {len(players)} players")
 
